@@ -28,6 +28,8 @@ canvas{display:block}
 #hpw{position:absolute;left:16px;bottom:16px;width:224px;height:24px;background:rgba(0,0,0,.6);display:none}
 #hpb{position:absolute;left:2px;top:2px;height:20px}#hpt{position:absolute;left:10px;top:3px;color:#fff;font-size:15px}
 #gdhud{position:absolute;left:50%;top:14px;transform:translateX(-50%);text-align:center;color:#fff;font-size:20px;text-shadow:0 0 4px #000}
+#games{background:rgba(255,255,255,.07);padding:8px 12px;border-radius:8px;min-width:340px;max-height:30vh;overflow:auto}
+.gl{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:6px}
 .fx{position:fixed;inset:0;pointer-events:none;opacity:0}
 </style>
 </head>
@@ -41,8 +43,10 @@ canvas{display:block}
 <input id="nm" placeholder="Username" maxlength="16">
 <div id="mainBtns" style="display:flex;flex-direction:column;gap:10px;align-items:center">
  <div class="row"><button id="bSolo">Singleplayer sandbox</button></div>
- <div class="row"><select id="gm"><option value="0">Sandbox</option><option value="1">Battle Royale</option><option value="2">Geometry Dash</option></select><button id="bHost">Host game</button></div>
- <div class="row"><input id="code" placeholder="Host code" maxlength="5" size="8" style="text-transform:uppercase"><button id="bJoin">Join game</button></div>
+ <div class="row"><select id="gm"><option value="0">Sandbox</option><option value="1">Battle Royale</option><option value="2">Geometry Dash</option><option value="3">Wall Chase</option></select><button id="bHost">Host game</button></div>
+ <div class="row"><input id="rname" placeholder="Room name" maxlength="24"><label style="align-self:center"><input type="checkbox" id="priv"> Private (code only, not listed)</label></div>
+ <div class="row"><input id="code" placeholder="Host code" maxlength="5" size="8" style="text-transform:uppercase"><button id="bJoin">Join with code</button></div>
+ <div id="games"><div class="row" style="justify-content:space-between;align-items:center"><b>Public games</b><button id="bRef">Refresh</button></div><div id="glist">...</div></div>
 </div>
 <div id="pauseBtns" class="row" style="display:none"><button id="bRes">Resume</button><button id="bLeave">Disconnect / main menu</button></div>
 <div id="msg" style="min-height:1.4em"></div>
@@ -211,7 +215,7 @@ const conns={},hp={0:100},nameOf={},remotes={},edits=new Map(),inMatch=new Set()
 const game={phase:0,winner:255,time:0,zone:{cx:MX,cz:MZ,r:ZR0},fx:MX,fz:MZ};
 let hurt=0,fireCd=0,zoneTick=0,overT=0,sendT=0,statT=0,startedCount=0,flash=0,mouseL=false;
 const isAuth=()=>role!=="client";
-const spectating=()=>gm===1&&hp[myId]<=0;
+const spectating=()=>(gm===1||gm===3)&&hp[myId]<=0;
 const nm=id=>id===myId?myName:(nameOf[id]||"P"+id);
 const allIds=()=>[myId,...Object.keys(conns).map(Number)];
 const send=(c,m)=>{try{c.send(m)}catch(e){}};
@@ -222,7 +226,7 @@ const pose=()=>gm===2?[gd.x,gd.dead?-50:gd.y,0,0,gd.rot]:[feet.x,feet.y,feet.z,y
 function posOf(id){if(id===myId){const p=pose();return{x:p[0],y:p[1],z:p[2]}}const r=remotes[id];return r&&r.t?{x:r.t[0],y:r.t[1],z:r.t[2]}:{x:0,y:-50,z:0}}
 function addFeed(s){feedList.push({s,life:6});if(feedList.length>6)feedList.shift()}
 function feedMsg(s){addFeed(s);bcast({t:"feed",s})}
-function tp(id,x,y,z){if(id===myId){feet.x=x;feet.y=y;feet.z=z;vx=vy=vz=0}else if(conns[id])send(conns[id],{t:"tp",x,y,z})}
+function tp(id,x,y,z){if(id===myId){feet.x=x;feet.y=y;feet.z=z;vx=vy=vz=0;if(gm===3){yaw=0;pitch=0}}else if(conns[id])send(conns[id],{t:"tp",x,y,z})}
 
 // block edits: host keeps the list so late joiners can replay it on top of the generated world
 function editSet(x,y,z,b){
@@ -255,7 +259,7 @@ function explode(x,y,z){
   flash=.25;
 }
 function tntDamage(cx,cy,cz){
-  if(gm===2||(gm===1&&game.phase!==1))return;
+  if(gm>=2||(gm===1&&game.phase!==1))return;
   for(const id of allIds()){
     if(gm===1&&!inMatch.has(id))continue;
     const p=posOf(id),d=Math.hypot(p.x-cx,p.y+.9-cy,p.z-cz);
@@ -276,8 +280,8 @@ function hostDamage(v,k,d){
   if(hp[v]===undefined||hp[v]<=0)return;
   hp[v]=Math.max(0,hp[v]-d);if(v===myId)hurt=.3;
   if(hp[v]>0)return;
-  feedMsg(k>=0&&k!==v?`${nm(k)} eliminated ${nm(v)}`:`${nm(v)} was ${k===-2?"caught by the zone":"blown up"}`);
-  if(gm===1)checkWin();else{hp[v]=100;tp(v,spawn.x,spawn.y,spawn.z)}
+  feedMsg(k>=0&&k!==v?`${nm(k)} eliminated ${nm(v)}`:`${nm(v)} was ${k===-2?"caught by the zone":k===-3?"crushed by the wall":"blown up"}`);
+  if(gm===1)checkWin();else if(gm===3)check3();else{hp[v]=100;tp(v,spawn.x,spawn.y,spawn.z)}
 }
 const aliveIds=()=>[...inMatch].filter(id=>hp[id]>0);
 function checkWin(){
@@ -304,7 +308,9 @@ function hostLobby(){
   for(const id of allIds()){hp[id]=100;const sx=Math.floor(spawn.x)+rnd(-3,3),sz=Math.floor(spawn.z)+rnd(-3,3);tp(id,sx+.5,surf(sx,sz)+.01,sz+.5)}
 }
 function hostTick(dt){
-  if(gm!==1||role==="client")return;
+  if(role==="client")return;
+  if(gm===3)return w3Tick(dt);
+  if(gm!==1)return;
   if(game.phase===1){
     game.time+=dt;game.zone=zoneAt(game.time);zoneTick+=dt;
     if(zoneTick>=1){zoneTick-=1;for(const id of aliveIds()){const p=posOf(id);if(Math.hypot(p.x-game.zone.cx,p.z-game.zone.cz)>game.zone.r)hostDamage(id,-2,ZDMG)}}
@@ -377,23 +383,44 @@ function updateRemotes(dt){
 
 // ---------------- networking (WebRTC via PeerJS; the host is the server) ----------------
 const CODE_CH="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-function hostNet(done,fail){
+const PUB_SLOTS=16,MAXP=8;
+let roomName="",isPub=false;
+// Public rooms live on fixed peer ids dnr-pub-0..15 so anyone can probe them; private rooms use a random code id nobody can enumerate.
+function hostNet(done,fail,pub){
   if(peer)peer.destroy();
-  hostCode=Array.from({length:5},()=>CODE_CH[rnd(0,CODE_CH.length-1)]).join("");
-  peer=new Peer("dnr-"+hostCode);
-  peer.on("error",e=>fail(e.type));
-  peer.on("open",done);
-  peer.on("connection",c=>{
-    const id=nextId++;
-    c.on("open",()=>{conns[id]=c;hp[id]=(gm===1&&game.phase!==0)?0:100;send(c,{t:"welcome",id,gm,edits:[...edits.values()]})});
-    c.on("data",m=>hostMsg(id,m));
-    c.on("close",()=>{delete conns[id];dropRemote(id);inMatch.delete(id);delete hp[id];if(gm===1)checkWin()});
-  });
+  let n=0;
+  const open=id=>{
+    const p=new Peer(id);let up=false;
+    p.on("error",e=>{
+      if(up)return;
+      if(pub&&e.type==="unavailable-id"){p.destroy();if(++n<PUB_SLOTS)open("dnr-pub-"+n);else fail("all public slots are taken")}
+      else fail(e.type);
+    });
+    p.on("open",()=>{up=true;peer=p;p.on("connection",onConn);done()});
+  };
+  if(pub){hostCode="PUBLIC";open("dnr-pub-0")}
+  else{hostCode=Array.from({length:5},()=>CODE_CH[rnd(0,CODE_CH.length-1)]).join("");open("dnr-"+hostCode)}
 }
+// A connection is only a player after its first "hello"; "info?" probes (from the room list) just get a reply.
+function onConn(c){
+  let id=null;
+  c.on("data",m=>{
+    if(id!==null)return hostMsg(id,m);
+    if(!m||typeof m!=="object")return;
+    if(m.t==="info?"){send(c,{t:"info",name:roomName,gm,n:1+Object.keys(conns).length});setTimeout(()=>c.close(),400)}
+    else if(m.t==="hello"){
+      if(Object.keys(conns).length>=MAXP-1){send(c,{t:"full"});setTimeout(()=>c.close(),400);return}
+      id=nextId++;conns[id]=c;hp[id]=((gm===1&&game.phase!==0)||gm===3)?0:100;
+      send(c,{t:"welcome",id,gm,edits:[...edits.values()]});hostMsg(id,m);
+    }
+  });
+  c.on("close",()=>{if(id===null)return;delete conns[id];dropRemote(id);inMatch.delete(id);delete hp[id];if(gm===1)checkWin();if(gm===3)check3()});
+}
+const cleanName=s=>String(s||"").replace(/[<>&"']/g,"").slice(0,16);
 const isInt=Number.isInteger;
 function hostMsg(id,m){
   if(!m||typeof m!=="object")return;
-  if(m.t==="hello")nameOf[id]=String(m.name||"").slice(0,16);
+  if(m.t==="hello")nameOf[id]=cleanName(m.name);
   else if(m.t==="pos"&&Array.isArray(m.p)&&m.p.length===5)getRemote(id).t=m.p.map(Number);
   else if(m.t==="set"){const{x,y,z,b}=m;if(isInt(x)&&isInt(y)&&isInt(z)&&b>=0&&b<9&&setBlock(x,y,z,b)){edits.set(ix(x,y,z),[x,y,z,b]);bcast({t:"set",x,y,z,b},id)}}
   else if(m.t==="ign"&&isInt(m.x)&&isInt(m.y)&&isInt(m.z))prime(m.x,m.y,m.z,3);
@@ -404,7 +431,7 @@ function joinNet(code,done,fail){
   peer=new Peer();
   peer.on("error",e=>fail(e.type));
   peer.on("open",()=>{
-    hostConn=peer.connect("dnr-"+code,{reliable:true});
+    hostConn=peer.connect(code,{reliable:true});
     hostConn.on("open",()=>toHost({t:"hello",name:myName}));
     hostConn.on("data",m=>clientMsg(m,done));
     hostConn.on("close",()=>{linkUp=false});
@@ -412,17 +439,18 @@ function joinNet(code,done,fail){
 }
 function clientMsg(m,done){
   switch(m.t){
-    case"welcome":myId=m.id;gm=m.gm;for(const e of m.edits)setBlock(e[0],e[1],e[2],e[3]);done();break;
+    case"welcome":myId=m.id;gm=m.gm;if(gm===3)flatWorld();for(const e of m.edits)setBlock(e[0],e[1],e[2],e[3]);done();break;
     case"st":{
       const seen=new Set();
       for(const e of m.L){
-        const id=e[0];seen.add(id);nameOf[id]=e[1];
+        const id=e[0];seen.add(id);nameOf[id]=cleanName(e[1]);
         if(id===myId){if(e[7]<(hp[myId]??100))hurt=.3;hp[id]=e[7];continue}
         getRemote(id).t=e.slice(2,7);hp[id]=e[7];
       }
       for(const id in remotes)if(!seen.has(+id))dropRemote(id);
       game.phase=m.ph;game.winner=m.w;game.zone={cx:m.z[0],cz:m.z[1],r:m.z[2]};game.time=m.tm;break;
     }
+    case"full":msg("That room is full");role="solo";peer.destroy();break;
     case"set":setBlock(m.x,m.y,m.z,m.b);break;
     case"prime":prime(m.x,m.y,m.z,m.fuse);break;
     case"boom":{const i=primed.findIndex(p=>p.x===m.x&&p.y===m.y&&p.z===m.z);if(i>=0){scene.remove(primed[i].m);primed.splice(i,1)}explode(m.x,m.y,m.z);break}
@@ -445,6 +473,42 @@ function netTick(dt){
   fireCd-=dt;hurt=Math.max(0,hurt-dt);flash=Math.max(0,flash-dt);
   for(let i=tracers.length-1;i>=0;i--){const t=tracers[i];if((t.life-=dt)<=0){scene.remove(t.l);t.l.geometry.dispose();tracers.splice(i,1)}}
   for(let i=feedList.length-1;i>=0;i--)if((feedList[i].life-=dt)<=0)feedList.splice(i,1);
+}
+
+// ---------------- Wall Chase: flat corridor, a killer wall that speeds up every level ----------------
+// Reuses the shared game state: game.zone.cx = wall front (x), game.zone.r = level, game.phase 1 = running / 2 = game over
+const W3_START=2,W3_GRACE=3,FIN=WX-14;
+const w3Speed=l=>Math.min(17,4.5+l*.9);
+const wallMesh=new THREE.Mesh(new THREE.BoxGeometry(2,12,9),new THREE.MeshBasicMaterial({color:0xff2020,transparent:true,opacity:.85}));
+wallMesh.visible=false;scene.add(wallMesh);
+function flatWorld(){
+  world.fill(0);
+  for(let x=0;x<WX;x++)for(let z=MZ-5;z<=MZ+5;z++){
+    const side=z<MZ-4||z>MZ+4;
+    for(let y=0;y<4;y++)world[ix(x,y,z)]=STONE;
+    world[ix(x,4,z)]=(!side&&x>=FIN&&x<FIN+2)?PLANKS:GRASS;
+    if(side||x<1||x>=WX-3)for(let y=5;y<=10;y++)world[ix(x,y,z)]=STONE;
+  }
+  dirty=true;
+}
+function w3Reset(lvl){
+  game.phase=1;game.time=0;game.winner=255;game.zone={cx:W3_START,cz:0,r:lvl};inMatch.clear();
+  for(const id of allIds()){inMatch.add(id);hp[id]=100;tp(id,8.5,5.01,MZ+.5+rnd(-3,3)*.8)}
+  feedMsg(`Level ${lvl} - wall speed ${w3Speed(lvl).toFixed(1)} blocks/s`);
+}
+function check3(){
+  if(game.phase!==1||aliveIds().length>0)return;
+  game.phase=2;overT=4;feedMsg(`Everyone was crushed - you reached level ${game.zone.r}`);
+}
+function w3Tick(dt){
+  if(game.phase===2){overT-=dt;if(overT<=0)w3Reset(1);return}
+  game.time+=dt;
+  if(game.time>W3_GRACE)game.zone.cx+=w3Speed(game.zone.r)*dt;
+  for(const id of aliveIds()){
+    const p=posOf(id);
+    if(p.x-.3<game.zone.cx){hostDamage(id,-3,100);if(game.phase!==1)return}
+    else if(p.x>=FIN){w3Reset(game.zone.r+1);return}
+  }
 }
 
 // ---------------- Geometry Dash ----------------
@@ -560,7 +624,7 @@ addEventListener("contextmenu",e=>e.preventDefault());
 addEventListener("mousedown",e=>{
   if(!locked)return;
   if(e.button===0)mouseL=true;
-  if(gm===2||spectating()||(e.button===0&&gm===1&&selected<7))return; // BR: LMB shoots (frame loop)
+  if(gm>=2||spectating()||(e.button===0&&gm===1&&selected<7))return; // BR: LMB shoots (frame loop)
   const h=raycast(eye(),dir());if(!h)return;
   if(e.button===0)editSet(h.x,h.y,h.z,AIR);
   else if(e.button===2&&selected<7&&!overlapsPlayer(h.px,h.py,h.pz)&&!solid(h.px,h.py,h.pz))editSet(h.px,h.py,h.pz,hotbar[selected]);
@@ -573,11 +637,17 @@ function dir(){const y=yaw*Math.PI/180,p=pitch*Math.PI/180;return{x:Math.cos(p)*
 const $=id=>document.getElementById(id),menu=$("menu");
 const HELP=["WASD move | Shift sprint | Space jump (hold: bhop) | LMB break | RMB place<br>1-9 / wheel select | T light TNT | ESC menu",
   "WASD move | Space jump (hold: bhop) | LMB shoot | RMB place | Q break<br>1-9 select | T light TNT | F start (host) | ESC menu",
-  "Hold Space / W / click to jump | R restart | ESC menu"];
+  "Hold Space / W / click to jump | R restart | ESC menu",
+  "BHOP to survive! Hold Space and strafe (A/D) while turning your mouse to build speed past the wall | Shift sprint | ESC menu"];
 function msg(s){$("msg").textContent=s}
 function readName(){myName=($("nm").value.trim()||"Player").slice(0,16)}
 function setupMode(){
   $("help").innerHTML=HELP[gm]+'<br><span id="spd"></span>';
+  if(gm===3){
+    if(role!=="client")flatWorld();
+    spawn={x:8.5,y:5.01,z:MZ+.5};Object.assign(feet,spawn);yaw=0;pitch=0;screen.visible=false;
+    if(role!=="client")w3Reset(1);
+  }
   if(gm===2){
     gBuild();gMeshBuild();gRestart();
     scene.background=new THREE.Color(0x0d1030);scene.fog=null;cam.fov=60;cam.updateProjectionMatrix();
@@ -591,15 +661,51 @@ function begin(lock){
 }
 $("bSolo").onclick=()=>{readName();role="solo";gm=0;begin(true)};
 $("bHost").onclick=()=>{
-  readName();gm=+$("gm").value;role="host";msg("Starting host...");
-  hostNet(()=>begin(true),e=>{role="solo";msg("Could not host: "+e)});
+  readName();gm=+$("gm").value;role="host";isPub=!$("priv").checked;
+  roomName=cleanName($("rname").value.trim()||myName+"s game").slice(0,24)||"Game";msg("Starting host...");
+  hostNet(()=>begin(true),e=>{role="solo";msg("Could not host: "+e)},isPub);
 };
 $("bJoin").onclick=()=>{
   readName();const c=$("code").value.trim().toUpperCase();
   if(!c)return msg("Enter the host's code first");
   role="client";msg("Connecting...");
-  joinNet(c,()=>begin(false),e=>{role="solo";msg("Could not join: "+e)});
+  joinNet("dnr-"+c,()=>begin(false),e=>{role="solo";msg("Could not join: "+e)});
 };
+const MODES=["Sandbox","Battle Royale","Geometry Dash","Wall Chase"];
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// Probe every public slot: a free slot answers "peer-unavailable", a live room answers our "info?" request.
+function scanRooms(cb){
+  const res=[],fins={};let pending=PUB_SLOTS,over=false;
+  const sp=new Peer();
+  const finish=()=>{if(over)return;over=true;try{sp.destroy()}catch(e){}cb(res)};
+  sp.on("open",()=>{
+    for(let i=0;i<PUB_SLOTS;i++){
+      const id="dnr-pub-"+i,c=sp.connect(id,{reliable:true});let done=false;
+      const fin=()=>{if(done)return;done=true;try{c.close()}catch(e){}if(--pending===0)finish()};
+      fins[id]=fin;
+      c.on("open",()=>c.send({t:"info?"}));
+      c.on("data",m=>{if(m&&m.t==="info"){res.push({id,name:m.name,gm:+m.gm,n:Number(m.n)|0});fin()}});
+      c.on("close",fin);c.on("error",fin);
+      setTimeout(fin,6000);
+    }
+  });
+  sp.on("error",e=>{
+    const id=(/dnr-pub-\d+/.exec(String(e.message||e))||[])[0];
+    if(e.type==="peer-unavailable"&&fins[id])fins[id]();else finish();
+  });
+}
+function refreshList(){
+  $("glist").textContent="Searching...";
+  scanRooms(list=>{
+    $("glist").innerHTML=list.length?list.map(r=>`<div class="gl"><span>${esc(r.name)} &middot; ${esc(MODES[r.gm]||"?")} &middot; ${r.n}/${MAXP}</span><button data-id="${esc(r.id)}">Join</button></div>`).join(""):"No public games right now - host one!";
+  });
+}
+$("glist").onclick=e=>{
+  const id=e.target.dataset&&e.target.dataset.id;if(!id)return;
+  readName();role="client";msg("Connecting...");
+  joinNet(id,()=>begin(false),er=>{role="solo";msg("Could not join: "+er)});
+};
+$("bRef").onclick=refreshList;refreshList();
 $("bRes").onclick=()=>renderer.domElement.requestPointerLock();
 $("bLeave").onclick=()=>location.reload();
 document.addEventListener("pointerlockchange",()=>{
@@ -609,8 +715,8 @@ document.addEventListener("pointerlockchange",()=>{
 
 function hud(){
   const nPl=role==="host"?1+Object.keys(conns).length:1+Object.keys(remotes).length;
-  const mn=["Sandbox","Battle Royale","Geometry Dash"][gm];
-  $("info").innerHTML=role==="host"?`HOSTING (${mn}) - ${nPl} player(s) online<br>Friends join with code: <b>${hostCode}</b>`
+  const mn=["Sandbox","Battle Royale","Geometry Dash","Wall Chase"][gm];
+  $("info").innerHTML=role==="host"?`HOSTING ${isPub?"PUBLIC":"PRIVATE"} "${esc(roomName)}" (${mn}) - ${nPl} player(s) online<br>`+(isPub?"Listed in the public games list":`Friends join with code: <b>${hostCode}</b>`)
     :role==="client"?(linkUp?`CONNECTED (${mn}) - you are ${myName} (P${myId})`:'<span style="color:#d00">DISCONNECTED FROM HOST - press ESC and leave</span>'):"";
   let b="";
   if(gm===1){
@@ -620,6 +726,13 @@ function hud(){
       const z=game.time<ZGRACE?`Zone starts closing in ${Math.ceil(ZGRACE-game.time)} s`:game.zone.r>ZR1+.1?"The zone is closing!":"Final zone";
       b=`<h2>ALIVE: ${alive}</h2>${z}`+(spectating()?"<br><b>ELIMINATED - spectating</b> (WASD fly, Space up, C down)":"");
     }else b=`<h1>${game.winner===255?"NO SURVIVORS":game.winner===myId?"YOU WIN!":nm(game.winner)+" WINS!"}</h1>Back to the lobby shortly...`;
+  }
+  if(gm===3){
+    const z=game.zone,lv=z.r||1,alive=[myId,...Object.keys(remotes)].filter(id=>hp[id]>0).length;
+    if(game.phase===2)b=`<h1>GAME OVER</h1>Reached level ${lv} - restarting...`;
+    else b=`<h2>LEVEL ${lv}</h2>`+(game.time<W3_GRACE?`Wall starts in ${Math.ceil(W3_GRACE-game.time)} s - RUN!`:`Wall speed ${w3Speed(lv).toFixed(1)} blocks/s`)
+      +`<br>Wall is ${Math.max(0,posOf(myId).x-z.cx).toFixed(1)} blocks behind you &middot; finish in ${Math.max(0,FIN-posOf(myId).x).toFixed(0)} &middot; alive: ${alive}`
+      +(spectating()?"<br><b>CRUSHED - spectating until the next level</b> (WASD fly, Space up, C down)":"");
   }
   $("banner").innerHTML=b;
   $("feed").innerHTML=feedList.map(f=>`<div>${f.s.replace(/</g,"&lt;")}</div>`).join("");
@@ -637,6 +750,7 @@ function cameraUpdate(dt){
     return;
   }
   const e=eye(),d=dir();cam.position.set(e.x,e.y,e.z);cam.lookAt(e.x+d.x,e.y+d.y,e.z+d.z);
+  wallMesh.visible=gm===3;wallMesh.position.set(game.zone.cx-1,11,MZ+.5);
   const z=game.zone;zoneMesh.visible=gm===1&&game.phase===1;zoneMesh.position.set(z.cx,20,z.cz);zoneMesh.scale.set(z.r,1,z.r);
 }
 
