@@ -168,7 +168,7 @@ function touchApply(){
   if(sp!==tj.sp){tj.sp=sp;padKey("ShiftLeft",sp)}
 }
 // ---------------- world ----------------
-const WX=128,WY=32,WZ=128,MX=64,MZ=64;
+const WX=256,WXB=128,WY=32,WZ=128,MX=64,MZ=64; // WX is the full array width (Wall Chase corridor); WXB is the classic 128-wide play area used by the other modes
 const AIR=0,GRASS=1,DIRT=2,STONE=3,SAND=4,WOOD=5,LEAVES=6,PLANKS=7,TNT=8,SLIME=9,ICE=10,BOOST=11;
 const BC=[[0,0,0],[96,160,64],[134,96,67],[125,125,125],[219,207,142],[102,81,49],[58,125,40],[176,140,85],[200,45,40],[90,200,80],[160,215,245],[255,170,20]];
 const world=new Uint8Array(WX*WY*WZ);
@@ -178,12 +178,12 @@ const solid=(x,y,z)=>inB(x,y,z)&&world[ix(x,y,z)]!==0;
 function hash3(x,y,z){let h=(Math.imul(x,73856093)^Math.imul(y,19349663)^Math.imul(z,83492791))>>>0;h=(h^(h>>>13))>>>0;h=Math.imul(h,0x5bd1e995)>>>0;return(h^(h>>>15))>>>0}
 function surf(x,z){for(let y=WY-1;y>=0;y--)if(world[ix(x,y,z)])return y+1;return 0}
 function gen(){
-  for(let x=0;x<WX;x++)for(let z=0;z<WZ;z++){
+  for(let x=0;x<WXB;x++)for(let z=0;z<WZ;z++){
     let h=Math.trunc(10+4*Math.sin(x*.1)+4*Math.cos(z*.12)+2*Math.sin((x+z)*.2)+3*Math.sin(x*.045+1.3)*Math.cos(z*.05+.7));
     h=Math.max(1,Math.min(WY-8,h));
     for(let y=0;y<=h;y++)world[ix(x,y,z)]=y<h-3?STONE:y<h?(h<=8?SAND:DIRT):(h<=8?SAND:GRASS);
   }
-  for(let x=3;x<WX-3;x++)for(let z=3;z<WZ-3;z++){
+  for(let x=3;x<WXB-3;x++)for(let z=3;z<WZ-3;z++){
     if(hash3(x,7,z)%80)continue;
     const h=surf(x,z)-1;if(world[ix(x,h,z)]!==GRASS)continue;
     if(Math.abs(x-MX)<6&&Math.abs(z-(MZ+1))<8)continue;
@@ -277,7 +277,7 @@ addEventListener("drop",e=>{e.preventDefault();const f=e.dataTransfer.files[0];
 const PW=.6,PH=1.8,EYE=1.62,REACH=6;
 const CHAIR={speed:8,push:12.5,roll:1.6,brake:10,grip:7,drop:.45};
 const feet={x:MX+.5,y:20,z:MZ+5.5};let spawn={...feet};
-let yaw=-90,pitch=0,vy=0,vx=0,vz=0,grounded=false,pogo=0,chairSeat=0,chairStep=0,selected=0;
+let djUsed=false,djPrev=false,yaw=-90,pitch=0,vy=0,vx=0,vz=0,grounded=false,pogo=0,chairSeat=0,chairStep=0,selected=0;
 const keys={};let locked=false,fireDown=0,kbx=0,kbz=0;
 function collides(px,py,pz){
   const hw=PW/2,x0=Math.floor(px-hw),x1=Math.floor(px+hw-.001),y0=Math.floor(py),y1=Math.floor(py+PH-.001),z0=Math.floor(pz-hw),z1=Math.floor(pz+hw-.001);
@@ -325,6 +325,7 @@ function updatePlayer(dt){
   if(ub===BOOST&&boostCd<=0&&!chair){const bx=len?wx:Math.cos(yr),bz=len?wz:Math.sin(yr),sp=Math.min(30,Math.max(17,Math.hypot(vx,vz)+4));vx=bx*sp;vz=bz*sp;boostT=1;boostCd=.35;rumble(150,.5,.8);shake=Math.max(shake,.2);sfx(250,900,.25,"sawtooth",.08);burst(feet.x,feet.y+.1,feet.z,0xffd030,12,6)}
   const hs=Math.hypot(vx,vz);
   if(hs>18&&boostT<=0){const ns=Math.max(18,hs-(hs-18)*Math.min(1,dt*4));vx*=ns/hs;vz*=ns/hs}else if(hs>30){vx*=30/hs;vz*=30/hs}
+  if(pup.w>0&&!chair&&hs>6){vx*=6/hs;vz*=6/hs} // SLOWED pickup: crawl for a few seconds
   // horizontal move, with wheelchair curb climbing
   for(const ax of["x","z"]){
     const v=ax==="x"?vx:vz,nx=feet.x+(ax==="x"?v*dt:0),nz=feet.z+(ax==="z"?v*dt:0);
@@ -334,6 +335,12 @@ function updatePlayer(dt){
     else if(ax==="x")vx=0;else vz=0;
   }
   if(jumpNow){vy=isPogo?8.5+pogo*10.5:8.5*(pup.j>0?1.45:1);if(isPogo)pogo=0;grounded=false}
+  // Wall Chase only: one extra jump in mid-air (needs a fresh Space press, so holding Space for bhop/pogo never wastes it)
+  if(gm===3){
+    if(grounded||jumpNow)djUsed=false; // jumpNow already cleared `grounded` this frame, so an auto-bhop landing has to reset it here
+    else if(space&&!djPrev&&!djUsed&&!chair){djUsed=true;vy=8.5*(pup.j>0?1.45:1);sfx(300,900,.15,"triangle",.08);burst(feet.x,feet.y+.1,feet.z,0xffffff,10,4)}
+    djPrev=!!space;
+  }else djUsed=false;
   vy-=28*dt;grounded=false;
   const ny=feet.y+vy*dt;
   const pvy=vy;
@@ -353,7 +360,7 @@ function updatePlayer(dt){
 }
 
 // ---------------- shared state (solo / host / client) ----------------
-const SHOT_RANGE=70,DMG=20,FIRE_CD=.35,ZR0=WX*.7,ZR1=3,ZGRACE=30,ZSHRINK=240,ZDMG=5,D2R=Math.PI/180;
+const SHOT_RANGE=70,DMG=20,FIRE_CD=.35,ZR0=WXB*.7,ZR1=3,ZGRACE=30,ZSHRINK=240,ZDMG=5,D2R=Math.PI/180;
 const PCOL=[0xe64646,0x4682e6,0xf0c83c,0x5ac864,0xbe64dc,0xf08c32,0x50d2d2,0xe678b4];
 let role="solo",gm=0,myId=0,myName="Player",peer=null,hostConn=null,hostCode="",nextId=1,started=false,linkUp=true;
 const conns={},hp={0:100},nameOf={},skinOf={},remotes={},edits=new Map(),inMatch=new Set(),tracers=[],feedList=[];
@@ -454,7 +461,7 @@ function hostStart(){
   game.fx=rnd(MX-16,MX+16);game.fz=rnd(MZ-16,MZ+16);game.zone=zoneAt(0);inMatch.clear();pickups=[];for(let i=0;i<10;i++)spawnPk();for(const k in streak)delete streak[k];pkT=3;
   for(const id of ids){
     inMatch.add(id);let s=[MX,MZ];
-    for(let k=0;k<30;k++){s=[rnd(16,WX-16),rnd(16,WZ-16)];if(used.every(u=>Math.hypot(u[0]-s[0],u[1]-s[1])>=20))break}
+    for(let k=0;k<30;k++){s=[rnd(16,WXB-16),rnd(16,WZ-16)];if(used.every(u=>Math.hypot(u[0]-s[0],u[1]-s[1])>=20))break}
     used.push(s);hp[id]=100;tp(id,s[0]+.5,surf(s[0],s[1])+.01,s[1]+.5);
   }
   feedMsg("Match started - last one standing wins!");
@@ -796,8 +803,12 @@ function netTick(dt){
 // ---------------- Wall Chase: flat corridor, a killer wall that speeds up every level ----------------
 // Reuses the shared game state: game.zone.cx = wall front (x), game.zone.r = level, game.phase 1 = running / 2 = game over
 const W3_START=2,W3_GRACE=3,FIN=WX-14;
-const w3Speed=l=>Math.min(17,4.5+l*.9);
-const wallMesh=new THREE.Mesh(new THREE.BoxGeometry(2,12,9),new THREE.MeshBasicMaterial({color:0xff2020,transparent:true,opacity:.85}));
+const w3Speed=l=>4.5+l*.9; // no cap: the wall keeps getting faster every level
+// Gaps in the floor (deterministic, so every client builds the same corridor). Platforms are 11-16 long; gaps grow from 3 to ~12 blocks
+// the further you get. Wide ones need dash / pogo / a boost pad, and a boost pad is placed right before each wide one.
+const W3_GAPS=(()=>{const g=[];let x=30,k=0;for(;;){x+=11+hash3(k,3,9)%6;const t=Math.min(1,(x-30)/(FIN-30-40)),w=Math.round(3+t*7+hash3(k,5,1)%3);if(x+w>FIN-14)break;g.push([x,x+w-1]);x+=w;k++}return g})();
+const w3InGap=x=>W3_GAPS.some(g=>x>=g[0]&&x<=g[1]);
+const wallMesh=new THREE.Mesh(new THREE.BoxGeometry(2,24,9),new THREE.MeshBasicMaterial({color:0xff2020,transparent:true,opacity:.85}));
 wallMesh.visible=false;scene.add(wallMesh);
 function flatWorld(){
   world.fill(0);
@@ -805,13 +816,17 @@ function flatWorld(){
     const side=z<MZ-4||z>MZ+4;
     for(let y=0;y<4;y++)world[ix(x,y,z)]=STONE;
     world[ix(x,4,z)]=(!side&&x>=FIN&&x<FIN+2)?PLANKS:GRASS;
-    if(!side&&x>=14&&x<FIN-3){if(x%22===0)world[ix(x,4,z)]=BOOST;else if(x%22===11&&Math.abs(z-MZ)<=1)world[ix(x,4,z)]=SLIME}
-    if(side||x<1||x>=WX-3)for(let y=5;y<=10;y++)world[ix(x,y,z)]=STONE;
+    if(!side&&x>=14&&x<FIN-3){
+      if(x===22)world[ix(x,4,z)]=BOOST;else if(x===34&&Math.abs(z-MZ)<=1)world[ix(x,4,z)]=SLIME;
+      for(const g of W3_GAPS)if(g[1]-g[0]>=5&&x===g[0]-4)world[ix(x,4,z)]=BOOST; // run-up pad before the wide gaps
+    }
+    if(!side&&w3InGap(x))for(let y=0;y<=4;y++)world[ix(x,y,z)]=0; // the gap: nothing below, you fall
+    if(side||x<1||x>=WX-3)for(let y=5;y<=28;y++)world[ix(x,y,z)]=STONE; // tall walls: pogo + dash + double jump can get high
   }
   markAllChunks();
 }
 function w3Reset(lvl){
-  game.phase=1;game.time=0;game.winner=255;game.zone={cx:W3_START,cz:0,r:lvl};inMatch.clear();game.slow=0;wcPickups();
+  game.phase=1;game.time=0;game.winner=255;game.zone={cx:W3_START,cz:0,r:lvl};inMatch.clear();game.slow=0;game.surge=0;wcPickups();
   for(const id of allIds()){inMatch.add(id);hp[id]=100;tp(id,8.5,5.01,MZ+.5+rnd(-3,3)*.8)}
   feedMsg(`Level ${lvl} - wall speed ${w3Speed(lvl).toFixed(1)} blocks/s`);
 }
@@ -822,10 +837,11 @@ function check3(){
 function w3Tick(dt){
   if(game.phase===2){overT-=dt;if(overT<=0)w3Reset(1);return}
   game.time+=dt;
-  game.slow=Math.max(0,(game.slow||0)-dt);
-  if(game.time>W3_GRACE)game.zone.cx+=w3Speed(game.zone.r)*dt*(game.slow>0?.35:1);
+  game.slow=Math.max(0,(game.slow||0)-dt);game.surge=Math.max(0,(game.surge||0)-dt);
+  if(game.time>W3_GRACE)game.zone.cx+=w3Speed(game.zone.r)*dt*(game.slow>0?.35:1)*(game.surge>0?1.8:1);
   for(const id of aliveIds()){
     const p=posOf(id);
+    if(p.y<-3){hostDamage(id,-4,100);if(game.phase!==1)return;continue} // fell in a gap
     if(p.x-.3<game.zone.cx){hostDamage(id,-3,100);if(game.phase!==1)return}
     else if(p.x>=FIN){if(pt.on)for(const i of aliveIds())pt.c[i]=(pt.c[i]||0)+1;w3Reset(game.zone.r+1);return}
   }
@@ -969,7 +985,12 @@ addEventListener("keydown",e=>{
   if(gm===5&&e.code==="KeyR"){griefSelf();return}
   if(gm===6){if(e.code==="KeyU"||e.code==="KeyF")zBuy("d");else if(e.code==="KeyH"||e.code==="KeyT")zBuy("h")}
   if(e.code==="KeyE"&&(gm===4||gm===5||(gm===8&&bfTh()===myId))){if(!spectating())tnPress()}
-  else if(e.code==="KeyE"&&dashCd<=0&&!spectating()){const y=yaw*D2R;vx+=Math.cos(y)*15;vz+=Math.sin(y)*15;if(grounded){vy=4;grounded=false}dashCd=1.2;boostT=.7;shake=.25;rumble(120,.3,.6);sfx(150,700,.2,"sawtooth",.08)}
+  else if(e.code==="KeyE"&&dashCd<=0&&!spectating()){const y=yaw*D2R;
+    // Wall Chase only: dashing with the camera 15+ degrees above the horizon trades horizontal boost for height (straight up = all height, no forward boost)
+    const up=gm===3?Math.max(0,Math.min(1,(pitch-15)/73)):0;
+    vx+=Math.cos(y)*15*(1-up);vz+=Math.sin(y)*15*(1-up);
+    if(up>0){vy=Math.max(vy,15*up);grounded=false}else if(grounded){vy=4;grounded=false}
+    dashCd=1.2;boostT=.7;shake=.25;rumble(120,.3,.6);sfx(150,700,.2,"sawtooth",.08)}
   if(e.code==="KeyT"){const h=raycast(eye(),dir());if(h&&world[ix(h.x,h.y,h.z)]===TNT){if(isAuth())prime(h.x,h.y,h.z,3);else toHost({t:"ign",x:h.x,y:h.y,z:h.z})}}
   if(e.code==="KeyF"){if(gm===5){if(role!=="client"&&game.phase===1&&!pt.on)g5Reset()}else hostStart()}
   if(e.code==="KeyQ"&&gm===1&&!spectating()){const h=raycast(eye(),dir());if(h)editSet(h.x,h.y,h.z,AIR)}
@@ -1001,7 +1022,7 @@ function dir(){const y=yaw*Math.PI/180,p=pitch*Math.PI/180;return{x:Math.cos(p)*
 
 // ---------------- fun pack: particles, synth sfx, screen shake, dash ----------------
 let inBoom=false,shake=0,dashCd=0,gDead=0,boostT=0,boostCd=0,bh=0,gT=0,gBest=0,gWon=0,popT=0,pkT=3,pkId=1,pickups=[];
-const pup={s:0,j:0,r:0},streak={},grabT={},pkMesh={};const parts=[],pm={},pGeo=new THREE.BoxGeometry(.14,.14,.14),pMat=c=>pm[c]||(pm[c]=new THREE.MeshBasicMaterial({color:c}));
+const pup={s:0,j:0,r:0,w:0},streak={},grabT={},pkMesh={};const parts=[],pm={},pGeo=new THREE.BoxGeometry(.14,.14,.14),pMat=c=>pm[c]||(pm[c]=new THREE.MeshBasicMaterial({color:c}));
 let actx=null;
 function sfx(f0,f1,d,ty,v){try{actx=actx||new(window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime;o.type=ty;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+d)}catch(e){}}
 function burst(x,y,z,c,n,sp){for(let i=0;i<n&&parts.length<400;i++){const m=new THREE.Mesh(pGeo,pMat(c));m.position.set(x,y,z);scene.add(m);parts.push({m,l:.5+Math.random()*.7,v:new THREE.Vector3(Math.random()-.5,Math.random()*.9,Math.random()-.5).multiplyScalar(sp*(.5+Math.random()))})}}
@@ -1015,7 +1036,7 @@ function boom(x,y,z){
   sfx(130,22,.7,"sawtooth",.22);sfx(70,20,.5,"square",.15);rumble(150+shake*400,Math.min(1,shake*1.2),.7);
 }
 function updateParts(dt){
-  shake=Math.max(0,shake-dt*2.5);dashCd-=dt;boostT-=dt;boostCd-=dt;pup.s-=dt;pup.j-=dt;pup.r-=dt;if((popT-=dt)<=0)popEl.style.opacity=0;
+  shake=Math.max(0,shake-dt*2.5);dashCd-=dt;boostT-=dt;boostCd-=dt;pup.s-=dt;pup.j-=dt;pup.r-=dt;pup.w-=dt;if((popT-=dt)<=0)popEl.style.opacity=0;
   for(let i=parts.length-1;i>=0;i--){const p=parts[i];if((p.l-=dt)<=0){scene.remove(p.m);parts.splice(i,1);continue}
     p.v.y-=22*dt;p.m.position.addScaledVector(p.v,dt);p.m.scale.setScalar(Math.min(1,p.l*2.5))}
 }
@@ -1024,14 +1045,29 @@ function updateParts(dt){
 const pwl=document.createElement("div");pwl.style.cssText="position:absolute;left:16px;bottom:48px;color:#fff;font-size:15px;line-height:1.5;text-shadow:0 0 3px #000";document.getElementById("hud").appendChild(pwl);
 const popEl=document.createElement("div");popEl.style.cssText="position:absolute;left:50%;top:26%;transform:translateX(-50%);font-size:34px;font-weight:900;color:#fff;text-shadow:0 0 8px #000,0 0 3px #000;opacity:0;transition:opacity .25s;white-space:nowrap";document.getElementById("hud").appendChild(popEl);
 function popMsg(t){popEl.textContent=t;popEl.style.opacity=1;popT=1.6}
-const PK_NAME=["+40 HP","SPEED BOOST","SUPER JUMP","RAPID FIRE","WALL SLOWED"],PK_COL=[0xff4060,0x40e0ff,0x60ff60,0xffa030,0xc060ff],PK_ICON=["❤️","⚡","🦘","🔫","🐌"];
+const PK_NAME=["+40 HP","SPEED BOOST","SUPER JUMP","RAPID FIRE","WALL SLOWED","YOU'RE SLOWED!","WALL SURGE!","EXPLOSION BOOST!"],PK_COL=[0xff4060,0x40e0ff,0x60ff60,0xffa030,0xc060ff,0x2a2a2a,0xe01010,0xffe020],PK_ICON=["❤️","⚡","🦘","🔫","🐌","🐢","🔥","💥"]; // 5 and 6 are BAD pickups (Wall Chase): avoid them
 const pkGeo=new THREE.OctahedronGeometry(.45),beamGeo=new THREE.CylinderGeometry(.12,.12,6,8,1,true);
 function spawnPk(){
   const z=game.zone;let x=0,zz=0;
-  for(let k=0;k<25;k++){x=rnd(6,WX-7);zz=rnd(6,WZ-7);if(Math.hypot(x-z.cx,zz-z.cz)<z.r-3)break}
+  for(let k=0;k<25;k++){x=rnd(6,WXB-7);zz=rnd(6,WZ-7);if(Math.hypot(x-z.cx,zz-z.cz)<z.r-3)break}
   pickups.push([pkId++,x+.5,surf(x,zz)+.9,zz+.5,[0,0,1,2,3][rnd(0,4)]]);
 }
-function wcPickups(){pickups=[];for(let x=22;x<FIN-8;x+=17)pickups.push([pkId++,x+.5,5.9,MZ+.5+rnd(-3,3),[1,2,4,4][rnd(0,3)]])}
+function wcPickups(){
+  pickups=[];const add=(x,dz,t)=>pickups.push([pkId++,x+.5,5.9,MZ+.5+dz,t]);
+  const plats=[];let a=0;for(const g of W3_GAPS){plats.push([a,g[0]-1]);a=g[1]+1}plats.push([a,FIN-4]);
+  for(const [x0,x1] of plats){
+    if(x1<20||x1-x0<8)continue;
+    const spots=[Math.max(x0+4,20)];if(x1-x0>=13)spots.push(x1-3);
+    for(const x of spots){
+      if(x<20||w3InGap(x))continue;
+      const side=rnd(0,1)?1:-1,r=Math.random(),nearGap=x>x1-6,good=()=>(nearGap?[1,2,7,7,7]:[1,2,4,7,7])[rnd(0,4)];
+      if(r<.38){add(x,side*2.6,good());add(x,-side*2.6,[5,6][rnd(0,1)])}      // fork: good one on one side, trap on the other
+      else if(r<.62)add(x,rnd(-1,1),[5,6][rnd(0,1)]);                                       // trap in the middle of the lane
+      else if(r<.82){add(x,-3,[5,6][rnd(0,1)]);add(x,3,[5,6][rnd(0,1)])}                    // traps on both edges
+      else add(x,rnd(-3,3),good());                                                         // free one
+    }
+  }
+}
 function pkTick(dt){
   if(gm!==1&&gm!==3)return;
   if(game.phase!==1){if(pickups.length)pickups=[];return}
@@ -1044,17 +1080,23 @@ function hostGrab(pid,id){
   pickups.splice(i,1);const t=p[4];
   if(t===0)hp[pid]=Math.min(100,hp[pid]+40);
   if(t===4){game.slow=5;feedMsg(`${nm(pid)} slowed the wall!`)}
+  if(t===6){game.surge=6;feedMsg(`${nm(pid)} grabbed a WALL SURGE - the wall speeds up!`)}
   if(pid===myId)applyLocal(t);else if(conns[pid])send(conns[pid],{t:"pw",type:t});
 }
 function applyLocal(t){
-  if(t===1)pup.s=8;else if(t===2)pup.j=10;else if(t===3)pup.r=10;
+  if(t===1)pup.s=8;else if(t===2)pup.j=10;else if(t===3)pup.r=10;else if(t===5)pup.w=4;
+  else if(t===7){ // a TNT blast just behind and below you: launches you up and forward (no blocks are destroyed)
+    const sp=Math.hypot(vx,vz),a=yaw*D2R,fx=sp>2?vx/sp:Math.cos(a),fz=sp>2?vz/sp:Math.sin(a);
+    vx+=fx*18;vz+=fz*18;vy=Math.max(vy,19);grounded=false;boostT=.8;
+    boom(feet.x-fx*1.3,feet.y-.8,feet.z-fz*1.3);flash=.2;
+  }
   popMsg(PK_ICON[t]+" "+PK_NAME[t]);rumble(100,.3,.6);sfx(500,1400,.18,"triangle",.1);burst(feet.x,feet.y+1,feet.z,PK_COL[t],18,6);
 }
 function updatePickups(dt,t){
   const seen=new Set();
   for(const p of pickups){
     seen.add(p[0]);let o=pkMesh[p[0]];
-    if(!o){const c=PK_COL[p[4]%5],g=new THREE.Group(),gem=new THREE.Mesh(pkGeo,new THREE.MeshBasicMaterial({color:c})),beam=new THREE.Mesh(beamGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.25,depthWrite:false}));beam.position.y=3;g.add(gem,beam);g.userData.gem=gem;scene.add(g);o=pkMesh[p[0]]=g}
+    if(!o){const c=PK_COL[p[4]],g=new THREE.Group(),gem=new THREE.Mesh(pkGeo,new THREE.MeshBasicMaterial({color:c})),beam=new THREE.Mesh(beamGeo,new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.25,depthWrite:false}));beam.position.y=3;g.add(gem,beam);g.userData.gem=gem;scene.add(g);o=pkMesh[p[0]]=g}
     o.position.set(p[1],p[2]+Math.sin(t*3+p[0])*.12,p[3]);o.userData.gem.rotation.y=t*2.5;
   }
   for(const id in pkMesh)if(!seen.has(+id)){scene.remove(pkMesh[id]);delete pkMesh[id]}
@@ -1121,7 +1163,7 @@ function ptRevive(id){
   if(hp[id]===undefined)return;
   if(gm===3)return w3Reset(game.zone.r);
   hp[id]=100;inMatch.add(id);
-  if(gm===1){const x=rnd(16,WX-16),z=rnd(16,WZ-16);tp(id,x+.5,surf(x,z)+.01,z+.5)}
+  if(gm===1){const x=rnd(16,WXB-16),z=rnd(16,WZ-16);tp(id,x+.5,surf(x,z)+.01,z+.5)}
   else if(gm===4)tp(id,MX+.5+rnd(-8,8),5.01,MZ+.5+rnd(-8,8));
   else if(gm===5)griefSpawn(id);else if(gm===6)zPlace(id);else if(gm===7)kPlace(id);else if(gm===8)bfPlace(id);
 }
@@ -1162,7 +1204,7 @@ const $=id=>document.getElementById(id),menu=$("menu");
 const HELP=["WASD move | Shift sprint | Space jump (hold: bhop) | LMB break | RMB place<br>1-0,-,= / wheel select | T light TNT | ESC menu",
   "WASD move | Space jump (hold: bhop) | LMB shoot | RMB place | Q break<br>1-0,-,= select | T light TNT | F start (host) | ESC menu",
   "Hold Space / W / click to jump | R restart | ESC menu",
-  "BHOP to survive! Hold Space and strafe (A/D) while turning your mouse to build speed past the wall | Shift sprint | ESC menu",
+  "BHOP to survive! Hold Space and strafe (A/D) while turning your mouse to build speed past the wall | JUMP the gaps (Space again in mid-air = double jump, E dash - look up 15+ degrees to dash upward instead, pogo, boost pads) | AVOID the black/red pickups: they slow you or speed up the wall | yellow 💥 = explosion boost | Shift sprint | ESC menu",
   "TNT RAIN: it rains TNT! E = grab a TNT, E again = throw it where you look (at others, or away from you) | Shift sprint | Space jump | Enter chat | ESC menu",
   "GRIEF: E = grab a lit TNT, E again = throw it at the target far below (it blows up on impact) | R back to the platform | F new target (host) | Shift sprint | Space jump | Enter chat | ESC menu",
   "ZOMBIES: LMB shoot (hold to auto-fire) | U upgrade weapon damage | H restore health | kill zombies for coins | Shift sprint | Space jump | ESC menu",
@@ -1359,7 +1401,7 @@ function hud(){
   $("hpw").style.display=showHp?"block":"none";
   if(showHp){const h=hp[myId]??100;$("hpb").style.width=h*2.2+"px";$("hpb").style.background=`rgb(${230-1.4*h},${70+1.5*h},70)`;$("hpt").textContent="HP "+h}
   $("gdhud").innerHTML=gm===2?`Attempt ${gAttempt} (best ${gBest}%) - ${Math.min(100,Math.floor(gd.x/gLen*100))}%`+(gd.dead?"<br><b style='color:#f55'>CRASHED</b>":gd.won?"<br><b style='color:#5f5'>LEVEL COMPLETE!</b>":""):"";
-  pwl.innerHTML=[pup.s>0?"⚡ Speed "+Math.ceil(pup.s)+"s":"",pup.j>0?"🦘 Super jump "+Math.ceil(pup.j)+"s":"",pup.r>0?"🔫 Rapid fire "+Math.ceil(pup.r)+"s":""].filter(Boolean).join("<br>");
+  pwl.innerHTML=[pup.s>0?"⚡ Speed "+Math.ceil(pup.s)+"s":"",pup.j>0?"🦘 Super jump "+Math.ceil(pup.j)+"s":"",pup.r>0?"🔫 Rapid fire "+Math.ceil(pup.r)+"s":"",pup.w>0?"🐢 SLOWED "+Math.ceil(pup.w)+"s":""].filter(Boolean).join("<br>");
   $("hurt").style.opacity=hurt*1.5;$("flash").style.opacity=flash*1.5;
 }
 let tpv=false,selfLu=null,selfSk=null;const selfG=new THREE.Group();
@@ -1388,7 +1430,7 @@ function cameraUpdate(dt){
   if(hillMesh.visible){const hc=kHoldNow();hillMesh.material.color.set(hc===-1?0xff4040:hc>=0?0x40ff70:0xffd040)}
   kpa=Math.max(0,kpa-dt/.28);fist.visible=gm===7&&started&&locked&&!spectating()&&!tpv;
   if(fist.visible){const sw=Math.sin((1-kpa)*Math.PI)*(kpa>0?1:0);fist.position.set(.36-.2*sw,-.34+.12*sw,-.75-.5*sw);fist.rotation.set(-.15*sw,.25*sw,0)}
-  wallMesh.visible=gm===3;wallMesh.position.set(game.zone.cx-1,11,MZ+.5);
+  wallMesh.visible=gm===3;wallMesh.position.set(game.zone.cx-1,17,MZ+.5);
   const z=game.zone;zoneMesh.visible=gm===1&&game.phase===1;zoneMesh.position.set(z.cx,20,z.cz);zoneMesh.scale.set(z.r,1,z.r);
 }
 
